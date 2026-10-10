@@ -1,0 +1,124 @@
+#==========================================================================
+# Description: Post-process the built Armbian image for AI3399-C:
+#              - force serial console to a PC-compatible baud rate
+#              - inject an admin SSH public key for passwordless access
+#              - normalize root login settings
+# Based on:    https://github.com/ophub/amlogic-s9xxx-armbian build output
+#==========================================================================
+
+name: Customize Armbian image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_asset:
+        description: "Release asset name of the image (empty = newest *.img.gz)."
+        required: false
+        default: ""
+      console_baud:
+        description: "Serial console baud rate (host 16550 max is 115200)."
+        required: false
+        default: "115200"
+      root_ssh_pubkey:
+        description: "SSH public key injected into /root/.ssh/authorized_keys."
+        required: true
+      root_password:
+        description: "Root password to set inside the image."
+        required: false
+        default: "1234"
+
+env:
+  TZ: Etc/UTC
+
+jobs:
+  customize:
+    runs-on: ubuntu-26.04-arm
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download image from release
+        id: getimg
+        run: |
+          set -e
+          asset="${{ inputs.image_asset }}"
+          if [[ -z "${asset}" ]]; then
+              asset=$(gh release view --json assets --jq '.assets[].name' \
+                      | grep -E '\.img\.gz$' | grep -v custom | head -n 1)
+          fi
+          echo "Using asset: ${asset}"
+          mkdir -p /builder
+          gh release download -D /builder -p "${asset}"
+          echo "ASSET=${asset}" >> ${GITHUB_ENV}
+          ls -l /builder
+
+      - name: Patch image (console, ssh key, root)
+        run: |
+          set -e
+          cd /builder
+          img="${ASSET%.gz}"
+          echo "Decompressing ${ASSET} -> ${img}"
+          gunzip -kf "${ASSET}"
+          sudo apt-get -y update >/dev/null 2>&1 || true
+          sudo apt-get -y install qemu-user-static >/dev/null 2>&1 || true
+
+          loop=$(sudo losetup --find --show -P "${img}")
+          echo "loop=${loop}"
+          sleep 2
+          ls -l ${loop}*
+
+          # --- boot partition (p1): extlinux console fix ---
+          sudo mkdir -p /mnt/boot /mnt/rootfs
+          sudo mount ${loop}p1 /mnt/boot
+          cfg=$(find /mnt/boot -name extlinux.conf | head -n 1)
+          echo "extlinux: ${cfg}"
+          if [[ -n "${cfg}" ]]; then
+              # drop any console=... tokens, then append the requested console
+              sudo sed -i -E 's/console=[^ ]*//g' "${cfg}"
+              sudo sed -i -E "s/(APPEND .*)/\\1 console=ttyS2,${{ inputs.console_baud }}n8 earlycon=uart8250,mmio32,0xff1a0000,${{ inputs.console_baud }}/" "${cfg}"
+              echo "----- patched extlinux.conf -----"
+              cat "${cfg}"
+          fi
+          sudo umount /mnt/boot
+
+          # --- rootfs partition (p2): ssh key + root credentials ---
+          sudo mount ${loop}p2 /mnt/rootfs
+          sudo mkdir -p /mnt/rootfs/root/.ssh
+          echo "${{ inputs.root_ssh_pubkey }}" | sudo tee /mnt/rootfs/root/.ssh/authorized_keys >/dev/null
+          sudo chmod 700 /mnt/rootfs/root/.ssh
+          sudo chmod 600 /mnt/rootfs/root/.ssh/authorized_keys
+
+          # allow root ssh login and keep password auth
+          if [[ -f /mnt/rootfs/etc/ssh/sshd_config ]]; then
+              sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /mnt/rootfs/etc/ssh/sshd_config
+              sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /mnt/rootfs/etc/ssh/sshd_config
+          fi
+
+          # set root password (native arm64 chroot)
+          echo "root:${{ inputs.root_password }}" | sudo chroot /mnt/rootfs chpasswd
+          sudo sync
+          sudo umount /mnt/rootfs
+
+          sudo losetup -d ${loop}
+
+          echo "Recompressing"
+          gzip -kf "${img}"
+          ls -lh "${img}.gz"
+
+      - name: Upload customized image
+        uses: ophub/upload-to-releases@main
+        with:
+          tag: customized
+          artifacts: /builder/*.img.gz
+          allow_updates: true
+          remove_artifacts: false
+          replaces_artifacts: false
+          make_latest: false
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ### Customized Armbian image (AI3399-C)
+            - Serial console: `ttyS2` @ `${{ inputs.console_baud }}` (for host 16550 adapters)
+            - Root SSH key injected, root password set
