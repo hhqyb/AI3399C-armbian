@@ -50,15 +50,17 @@ jobs:
                       | grep -E '\.img\.gz$' | grep -v custom | head -n 1)
           fi
           echo "Using asset: ${asset}"
-          mkdir -p /builder
-          gh release download -D /builder -p "${asset}"
+          work="${{ github.workspace }}/out"
+          mkdir -p "${work}"
+          gh release download -D "${work}" -p "${asset}"
           echo "ASSET=${asset}" >> ${GITHUB_ENV}
-          ls -l /builder
+          echo "WORK=${work}" >> ${GITHUB_ENV}
+          ls -l "${work}"
 
       - name: Patch image (console, ssh key, root)
         run: |
           set -e
-          cd /builder
+          cd "${WORK}"
           img="${ASSET%.gz}"
           echo "Decompressing ${ASSET} -> ${img}"
           gunzip -kf "${ASSET}"
@@ -112,7 +114,7 @@ jobs:
         uses: ophub/upload-to-releases@main
         with:
           tag: customized
-          artifacts: /builder/*.img.gz
+          artifacts: ${{ github.workspace }}/out/*.img.gz
           allow_updates: true
           remove_artifacts: false
           replaces_artifacts: false
