@@ -25,3 +25,19 @@
 2. SD 卡换定制镜像（读卡器直写，或恢复 Android 后经 adb 远程写入）。
 3. 若 U-Boot 阶段仍需可见：换 CH340/CP2102/FTDI USB-TTL（支持 1.5 Mbps）。
 4. 需要时 RECOVERY 键进 loader，RKDevTool 重刷官方固件救砖。
+
+## 2026-10-10 深夜更新（route B 部署）
+
+| 时间 | 动作 | 结果 |
+|---|---|---|
+| 22:12 | route-B 镜像（原厂引导链+vendor 4.19 内核+Armbian trixie rootfs）写入 SD 卡 | ✅ GPT/CRC 校验通过 |
+| 22:20 | 发现 eMMC loader 区其实从未被清（首轮 dd 静默失败），Android 完好 | ✅ adb 恢复可随时救砖 |
+| 22:24 | SD 在位上电：adb 消失（SD 引导链被拉起），但串口 115200 无输出、无网络 | ⚠️ 盲区 |
+| 22:45 | **根因定位**：vendor DTB `/fiq-debugger` 写死 `rockchip,baudrate = <1500000>`，COM1（16550）上限 115200 无法接收 | ✅ 已破解 |
+| 22:50 | 三份 DTB 波特率 patch 为 115200（tools/patch_fiq_baud.py）；boot.img v2 增加 `earlycon=uart8250,mmio32,0xff180000,115200` + `console=tty1` | ✅ 待刷入 SD |
+
+硬件确认：调试串口 = **UART0 @ 0xff180000**（DTB serial0/fiq-debugger 指向），
+即 COM1 所接引脚；fiq-debugger 控制台默认 1500000 波特率。
+
+待办：拔 SD 恢复 Android → 热插 SD → adb 写入 boot.img v2 → 断电重启观察
+COM1@115200 + 屏幕（console=tty1）。
