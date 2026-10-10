@@ -60,8 +60,15 @@ jobs:
           src_tag="Armbian_resolute_arm64_server_2026.10"
           asset=$(gh release view "${src_tag}" --json assets --jq '.assets[].name' \
                   | grep -E "Odroidn2_${{ inputs.rootfs_source }}.*minimal\.img\.xz$" | head -n 1)
-          echo "rootfs source asset: ${asset}"
-          gh release download "${src_tag}" -D "${work}" -p "${asset}"
+          if [[ -n "${asset}" ]]; then
+              echo "rootfs source asset from release: ${asset}"
+              gh release download "${src_tag}" -D "${work}" -p "${asset}"
+          else
+              site="https://armbian.tnahosting.net/dl/odroidn2/archive/"
+              asset=$(curl -s "${site}" | grep -oE "Armbian[^\"']*Odroidn2_${{ inputs.rootfs_source }}[^\"']*minimal\.img\.xz" | head -n 1)
+              echo "rootfs source asset from mirror: ${asset}"
+              curl -fL -o "${work}/${asset}" "${site}${asset}"
+          fi
           echo "WORK=${work}" >> ${GITHUB_ENV}
           echo "ASSET=${asset}" >> ${GITHUB_ENV}
           ls -lh "${work}"
@@ -80,9 +87,14 @@ jobs:
           sudo mkdir -p /mnt/rootfs
           sudo mount "${rootdev}" /mnt/rootfs
 
-          sudo tar -xJf vendor-modules-4.19.172.tar.xz -C /mnt/rootfs/lib/
-          sudo tar -xJf vendor-firmware.tar.xz -C /mnt/rootfs/lib/ vendor-firmware
-          sudo mv /mnt/rootfs/lib/vendor-firmware /mnt/rootfs/lib/firmware 2>/dev/null || true
+          sudo mkdir -p /tmp/vendor-km /mnt/rootfs/lib/modules/4.19.172
+          sudo tar -xJf vendor-modules-4.19.172.tar.xz -C /tmp/vendor-km
+          sudo cp /tmp/vendor-km/vendor-modules/*.ko /mnt/rootfs/lib/modules/4.19.172/
+          sudo chroot /mnt/rootfs depmod -a 4.19.172 || true
+
+          sudo tar -xJf vendor-firmware.tar.xz -C /tmp/vendor-km
+          sudo mkdir -p /mnt/rootfs/lib/firmware
+          sudo cp -a /tmp/vendor-km/vendor-firmware/. /mnt/rootfs/lib/firmware/
 
           sudo mkdir -p /mnt/rootfs/root/.ssh
           echo "${{ inputs.root_ssh_pubkey }}" | sudo tee /mnt/rootfs/root/.ssh/authorized_keys >/dev/null
@@ -142,11 +154,12 @@ jobs:
           sudo sgdisk -p "${img}"
 
           echo "Writing loader and partition contents"
-          # idbloader (MiniLoaderAll) at sector 64
-          gh release download vendor-blobs -D "${WORK}" -p 'vendor-kernel-4.19.172.img.xz' >/dev/null 2>&1 || true
+          # raw idbloader area (idbloader+padding, extracted from stock eMMC);
+          # MiniLoaderAll.bin is a 'BOOT' container that the flasher unwraps,
+          # so the raw form is used for direct dd writes.
+          gh release download vendor-blobs -D "${WORK}" -p 'emmc-loader-backup.bin'
           sudo dd if=/dev/zero of="${img}" bs=512 seek=64 count=16320 conv=notrunc status=none
-          printf 'placeholders for loader below\n' >/dev/null
-          sudo dd if=loader.bin       of="${img}" bs=512 seek=64    conv=notrunc status=none
+          sudo dd if=emmc-loader-backup.bin of="${img}" bs=512 seek=64    conv=notrunc status=none
           sudo dd if=uboot.img        of="${img}" bs=512 seek=0x4000  conv=notrunc status=none
           sudo dd if=trust.img        of="${img}" bs=512 seek=0x6000  conv=notrunc status=none
           sudo dd if=boot-armbian-vendor.img of="${img}" bs=512 seek=0xE800 conv=notrunc status=none
