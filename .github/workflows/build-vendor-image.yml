@@ -1,0 +1,173 @@
+#==========================================================================
+# Description: Build the route-B image for AI3399-C (RK3399):
+#              stock vendor boot chain (MiniLoaderAll + uboot.img + trust.img)
+#              + vendor 4.19.172 kernel + Armbian rootfs, packed as a full
+#              GPT SD/eMMC image.  LVDS (GM8775C), RTL8723DS WiFi/BT, Mali
+#              and ES8388 are driven by the vendor kernel and modules.
+# Based on:    https://github.com/ophub/amlogic-s9xxx-armbian (build output)
+#              vendor blobs from release tag: vendor-blobs
+#==========================================================================
+
+name: Build vendor-boot Armbian image
+
+on:
+  workflow_dispatch:
+    inputs:
+      rootfs_source:
+        description: "Rootfs to reuse (trixie = systemd 252, safer for 4.19)."
+        required: false
+        default: "trixie"
+        type: choice
+        options:
+          - trixie
+          - resolute
+      rootfs_size_mb:
+        description: "Rootfs partition size in MiB."
+        required: false
+        default: "3584"
+      root_password:
+        description: "Root password inside the image."
+        required: false
+        default: "1234"
+      root_ssh_pubkey:
+        description: "SSH public key injected into /root/.ssh/authorized_keys."
+        required: true
+
+env:
+  TZ: Etc/UTC
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04-arm
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Fetch vendor blobs and Armbian rootfs source
+        run: |
+          set -e
+          work="${{ github.workspace }}/out"
+          mkdir -p "${work}"
+          gh release download vendor-blobs -D "${work}" \
+            -p 'vendor-kernel-4.19.172.img.xz' -p 'vendor-rsce-dtb.bin' \
+            -p 'vendor-modules-4.19.172.tar.xz' -p 'vendor-firmware.tar.xz'
+
+          # Armbian official image containing the rootfs partition
+          src_tag="Armbian_resolute_arm64_server_2026.10"
+          asset=$(gh release view "${src_tag}" --json assets --jq '.assets[].name' \
+                  | grep -E "Odroidn2_${{ inputs.rootfs_source }}.*minimal\.img\.xz$" | head -n 1)
+          echo "rootfs source asset: ${asset}"
+          gh release download "${src_tag}" -D "${work}" -p "${asset}"
+          echo "WORK=${work}" >> ${GITHUB_ENV}
+          echo "ASSET=${asset}" >> ${GITHUB_ENV}
+          ls -lh "${work}"
+
+      - name: Prepare rootfs with vendor modules and credentials
+        run: |
+          set -e
+          cd "${WORK}"
+          xz -dkf "${ASSET}"
+          img="${ASSET%.xz}"
+          loop=$(sudo losetup --find --show -P "${img}")
+          sleep 2
+          # last partition = rootfs
+          rootdev=$(ls -1 ${loop}p* | tail -n 1)
+          echo "rootfs device: ${rootdev}"
+          sudo mkdir -p /mnt/rootfs
+          sudo mount "${rootdev}" /mnt/rootfs
+
+          sudo tar -xJf vendor-modules-4.19.172.tar.xz -C /mnt/rootfs/lib/
+          sudo tar -xJf vendor-firmware.tar.xz -C /mnt/rootfs/lib/ vendor-firmware
+          sudo mv /mnt/rootfs/lib/vendor-firmware /mnt/rootfs/lib/firmware 2>/dev/null || true
+
+          sudo mkdir -p /mnt/rootfs/root/.ssh
+          echo "${{ inputs.root_ssh_pubkey }}" | sudo tee /mnt/rootfs/root/.ssh/authorized_keys >/dev/null
+          sudo chmod 700 /mnt/rootfs/root/.ssh
+          sudo chmod 600 /mnt/rootfs/root/.ssh/authorized_keys
+          if [[ -f /mnt/rootfs/etc/ssh/sshd_config ]]; then
+              sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /mnt/rootfs/etc/ssh/sshd_config
+              sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /mnt/rootfs/etc/ssh/sshd_config
+          fi
+          echo "root:${{ inputs.root_password }}" | sudo chroot /mnt/rootfs chpasswd
+
+          # fstab: root on PARTLABEL=rootfs, do not mount anything else
+          echo 'PARTLABEL=rootfs  /  ext4  defaults,noatime  0 1' | sudo tee /mnt/rootfs/etc/fstab >/dev/null
+          sudo sync
+          sudo umount /mnt/rootfs
+
+          size_mb="${{ inputs.rootfs_size_mb }}"
+          echo "Extracting rootfs (${size_mb} MiB)"
+          sudo dd if="${rootdev}" of="${WORK}/rootfs.ext4" bs=1M count="${size_mb}" status=progress
+          sudo chown runner:runner "${WORK}/rootfs.ext4"
+          sudo losetup -d "${loop}"
+
+      - name: Pack vendor boot.img and assemble GPT image
+        run: |
+          set -e
+          cd "${WORK}"
+          xz -dkf vendor-kernel-4.19.172.img.xz   # -> kernel-extracted.bin
+
+          python3 "${{ github.workspace }}/tools/pack_bootimg.py" \
+            --template "${{ github.workspace }}/vendor/bootimg-header-template.bin" \
+            --kernel kernel-extracted.bin \
+            --ramdisk /dev/null \
+            --second vendor-rsce-dtb.bin \
+            --cmdline-mode replace \
+            --cmdline "console=ttyFIQ0,115200n8 earlycon=uart8250,mmio32,0xff1a0000,115200 androidboot.hardware=rk30board firmware_class.path=/vendor/etc/firmware root=PARTLABEL=rootfs rootwait rw rootfstype=ext4 swiotlb=1 coherent_pool=1m androidboot.selinux=permissive consoleblank=0" \
+            --output boot-armbian-vendor.img
+
+          # GPT layout mirroring vendor/parameter-armbian.txt (512-byte sectors):
+          # uboot 0x4000+0x2000, trust 0x6000+0x2000, misc 0x8000+0x2000,
+          # dtb 0xA000+0x2000, dtbo 0xC000+0x2000, vbmeta 0xE000+0x800,
+          # boot 0xE800+0x16000, rootfs 0x24800 + size
+          img="Armbian_vendor419_AI3399C.img"
+          root_sectors=$(( $(stat -c%s rootfs.ext4) / 512 ))
+          end_root=$(( 0x24800 + root_sectors - 1 ))
+          truncate -s $(( (end_root + 1) * 512 )) "${img}"
+
+          sudo sgdisk -Z "${img}"
+          sudo sgdisk -o "${img}"
+          sudo sgdisk -n 1:0x4000:0x5FFF   -t 1:8300 -c 1:uboot   "${img}"
+          sudo sgdisk -n 2:0x6000:0x7FFF   -t 2:8300 -c 2:trust   "${img}"
+          sudo sgdisk -n 3:0x8000:0x9FFF   -t 3:8300 -c 3:misc    "${img}"
+          sudo sgdisk -n 4:0xA000:0xBFFF   -t 4:8300 -c 4:dtb     "${img}"
+          sudo sgdisk -n 5:0xC000:0xDFFF   -t 5:8300 -c 5:dtbo    "${img}"
+          sudo sgdisk -n 6:0xE000:0xE7FF   -t 6:8300 -c 6:vbmeta  "${img}"
+          sudo sgdisk -n 7:0xE800:0x247FF  -t 7:8300 -c 7:boot    "${img}"
+          sudo sgdisk -n 8:0x24800:0       -t 8:8300 -c 8:rootfs  "${img}"
+          sudo sgdisk -p "${img}"
+
+          echo "Writing loader and partition contents"
+          # idbloader (MiniLoaderAll) at sector 64
+          gh release download vendor-blobs -D "${WORK}" -p 'vendor-kernel-4.19.172.img.xz' >/dev/null 2>&1 || true
+          sudo dd if=/dev/zero of="${img}" bs=512 seek=64 count=16320 conv=notrunc status=none
+          printf 'placeholders for loader below\n' >/dev/null
+          sudo dd if=loader.bin       of="${img}" bs=512 seek=64    conv=notrunc status=none
+          sudo dd if=uboot.img        of="${img}" bs=512 seek=0x4000  conv=notrunc status=none
+          sudo dd if=trust.img        of="${img}" bs=512 seek=0x6000  conv=notrunc status=none
+          sudo dd if=boot-armbian-vendor.img of="${img}" bs=512 seek=0xE800 conv=notrunc status=none
+          sudo dd if=rootfs.ext4      of="${img}" bs=512 seek=0x24800 conv=notrunc status=none
+
+          ls -lh "${img}"
+          gzip -kf "${img}"
+          ls -lh "${img}.gz"
+
+      - name: Upload image
+        uses: ophub/upload-to-releases@main
+        with:
+          tag: vendor-boot
+          artifacts: ${{ github.workspace }}/out/Armbian_vendor419_AI3399C.img.gz
+          allow_updates: true
+          remove_artifacts: false
+          replaces_artifacts: true
+          make_latest: false
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ### Route-B image: vendor 4.19 kernel + Armbian rootfs (AI3399-C)
+            - Full GPT SD/eMMC image: MiniLoaderAll + uboot + trust + Android boot.img + rootfs
+            - Serial console `ttyFIQ0` @ 115200 (PC 16550 compatible)
+            - Root SSH key injected; root password set

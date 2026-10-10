@@ -31,6 +31,8 @@ def parse_args():
     p.add_argument("--ramdisk", required=True)
     p.add_argument("--second", default=None)
     p.add_argument("--cmdline", default="")
+    p.add_argument("--cmdline-mode", choices=["append", "replace"], default="append",
+                   help="append to the template cmdline (default) or replace it")
     p.add_argument("--page-size", type=int, default=None)
     p.add_argument("--header-version", type=int, default=None)
     p.add_argument("--output", required=True)
@@ -59,7 +61,10 @@ def main():
     second = open(a.second, "rb").read() if a.second else b""
 
     cmdline = a.cmdline.encode()
-    full_cmdline = (t_cmdline + " " + a.cmdline).encode() if a.cmdline else t_cmdline.encode()
+    if a.cmdline_mode == "replace":
+        full_cmdline = a.cmdline.encode()
+    else:
+        full_cmdline = (t_cmdline + " " + a.cmdline).encode() if a.cmdline else t_cmdline.encode()
     if len(full_cmdline) > 511:
         # overflow into extra_cmdline (1024 bytes) as the spec allows
         main_cmd = full_cmdline[:511]
