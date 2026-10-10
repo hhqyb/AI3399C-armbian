@@ -29,6 +29,7 @@ on:
 
 env:
   TZ: Etc/UTC
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   customize:
