@@ -54,7 +54,8 @@ jobs:
           mkdir -p "${work}"
           gh release download vendor-blobs -D "${work}" \
             -p 'vendor-kernel-4.19.172.img.xz' -p 'vendor-rsce-dtb.bin' \
-            -p 'vendor-modules-4.19.172.tar.xz' -p 'vendor-firmware.tar.xz'
+            -p 'vendor-modules-4.19.172.tar.xz' -p 'vendor-firmware.tar.xz' \
+            -p 'uboot.img' -p 'trust.img' -p 'emmc-loader-backup.bin'
 
           # Armbian official image containing the rootfs partition
           src_tag="Armbian_resolute_arm64_server_2026.10"
@@ -134,11 +135,11 @@ jobs:
         run: |
           set -e
           cd "${WORK}"
-          xz -dkf vendor-kernel-4.19.172.img.xz   # -> kernel-extracted.bin
+          xz -dkf vendor-kernel-4.19.172.img.xz   # -> vendor-kernel-4.19.172.img
 
           python3 "${{ github.workspace }}/tools/pack_bootimg.py" \
             --template "${{ github.workspace }}/vendor/bootimg-header-template.bin" \
-            --kernel kernel-extracted.bin \
+            --kernel vendor-kernel-4.19.172.img \
             --ramdisk "${{ github.workspace }}/boot-assets/gadget-initramfs.cpio.gz" \
             --second "${{ github.workspace }}/boot-assets/rsce-115200.bin" \
             --cmdline-mode replace \
