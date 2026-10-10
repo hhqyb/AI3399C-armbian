@@ -108,11 +108,24 @@ jobs:
 
           # fstab: root on PARTLABEL=rootfs, do not mount anything else
           echo 'PARTLABEL=rootfs  /  ext4  defaults,noatime  0 1' | sudo tee /mnt/rootfs/etc/fstab >/dev/null
+
+          # extlinux boot path (U-Boot distro_bootcmd fallback) + kernel files
+          assets="${{ github.workspace }}/boot-assets"
+          sudo mkdir -p /mnt/rootfs/boot/extlinux
+          sudo cp "${assets}/rk3399-ai3399c.dtb" /mnt/rootfs/boot/
+          sudo cp "${assets}/gadget-initramfs.cpio.gz" /mnt/rootfs/boot/
+          sudo cp "${assets}/extlinux.conf" /mnt/rootfs/boot/extlinux/extlinux.conf
+          # kernel Image from the vendor-blobs tarball
+          xz -dc vendor-kernel-4.19.172.img.xz | sudo tee /mnt/rootfs/boot/Image >/dev/null
+          sudo ls -l /mnt/rootfs/boot /mnt/rootfs/boot/extlinux
+
           sudo sync
           sudo umount /mnt/rootfs
 
           size_mb="${{ inputs.rootfs_size_mb }}"
-          echo "Extracting rootfs (${size_mb} MiB)"
+          part_mb=$(( $(sudo blockdev --getsize64 "${rootdev}") / 1048576 ))
+          [[ "${size_mb}" -gt "${part_mb}" ]] && size_mb="${part_mb}"
+          echo "Extracting rootfs (${size_mb} MiB of ${part_mb} MiB partition)"
           sudo dd if="${rootdev}" of="${WORK}/rootfs.ext4" bs=1M count="${size_mb}" status=progress
           sudo chown runner:runner "${WORK}/rootfs.ext4"
           sudo losetup -d "${loop}"
@@ -126,10 +139,10 @@ jobs:
           python3 "${{ github.workspace }}/tools/pack_bootimg.py" \
             --template "${{ github.workspace }}/vendor/bootimg-header-template.bin" \
             --kernel kernel-extracted.bin \
-            --ramdisk /dev/null \
-            --second vendor-rsce-dtb.bin \
+            --ramdisk "${{ github.workspace }}/boot-assets/gadget-initramfs.cpio.gz" \
+            --second "${{ github.workspace }}/boot-assets/rsce-115200.bin" \
             --cmdline-mode replace \
-            --cmdline "console=ttyFIQ0,115200n8 earlycon=uart8250,mmio32,0xff1a0000,115200 androidboot.hardware=rk30board firmware_class.path=/vendor/etc/firmware root=PARTLABEL=rootfs rootwait rw rootfstype=ext4 swiotlb=1 coherent_pool=1m androidboot.selinux=permissive consoleblank=0" \
+            --cmdline "earlycon=uart8250,mmio32,0xff180000,115200 console=ttyFIQ0,115200n8 console=ttyS1,115200n8 console=ttyS2,115200n8 console=ttyS3,115200n8 console=ttyS4,115200n8 console=tty1 androidboot.hardware=rk30board firmware_class.path=/vendor/etc/firmware root=PARTLABEL=rootfs rootwait rw rootfstype=ext4 swiotlb=1 coherent_pool=1m androidboot.selinux=permissive consoleblank=0" \
             --output boot-armbian-vendor.img
 
           # GPT layout mirroring vendor/parameter-armbian.txt (512-byte sectors):
