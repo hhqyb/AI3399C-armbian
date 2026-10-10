@@ -1,43 +1,49 @@
 # 部署与实测记录
 
-## 2026-10-10
+## 2026-10-10 ~ 10-11 最终结果：✅ 适配成功
 
-| 时间 | 动作 | 结果 |
+**Armbian（trixie，vendor 4.19.172 内核）已在 AI3399-C 上从 eMMC 自主启动并稳定运行。**
+
+| 项目 | 状态 | 证据 |
 |---|---|---|
-| 21:00 | GitHub Actions 构建（ophub 流水线，board=aio-3399c，kernel 6.18.55，resolute） | ✅ 产出 `Armbian_26.8.1_rockchip_aio-3399c_resolute_6.18.55_server_2026.10.10.img.gz` |
-| 21:09 | 镜像经 adb 写入 SD 卡（mmcblk1，3.4 GB） | ✅ GPT 校验通过；镜像自带 idbloader@0x40 + u-boot FIT@0x4000 + ext4 boot/rootfs |
-| 21:12 | 备份 eMMC loader 区（0x40–0x4000）至 emmc-loader-backup.bin | ✅ md5 6856bdfabf571c83c86fd45d204d1cd8 |
-| 21:13 | 清零 eMMC loader 区强制 SD 启动（RK3399 BootROM 顺序 SPI→eMMC→SD） | ⚠️ 读回仍见旧数据（疑似缓存），重启后 adb 消失、局域网无踪迹，板子状态未知 |
-| 21:30 | 局域网扫描 + SSH root/1234 探测 | ❌ 未发现 Armbian 主机（网线已插，疑似 U-Boot/内核未起或 GMAC 未链路） |
-| 21:36 | 定制镜像工作流 `customize-image.yml`：串口 console 改 115200、注入 SSH 公钥、root/1234 | ✅ [customized release](https://github.com/hhqyb/AI3399C-armbian/releases/tag/customized) |
+| 系统 | ✅ Armbian trixie (arm64) | `uname -a`: Linux **ai3399c** 4.19.172 aarch64 |
+| 设备树 | ✅ 原厂 GM8775C 变体 | `/proc/device-tree/model` = Rockchip RK3399 AI3399-C Lvds(GM8775C) |
+| 有线网 | ✅ DHCP 正常 | end0 = 192.168.100.122，SSH 可达 |
+| WiFi | ✅ RTL8723DS | wlan0 + p2p0（8723ds.ko 开机自动加载） |
+| GPU | ✅ Mali | /dev/mali0、/dev/dri/renderD128 |
+| 显示 | ✅ LVDS 1920x1080 | fb0: U:1920x1080p-0 |
+| 音频 | ✅ ES8388 + HDMI | /proc/asound: rockchipes8388c、hdmisound |
+| 存储 | ✅ rootfs 26 GB（24 GB 可用） | /dev/mmcblk2p15（userdata 分区，resize2fs 已扩容） |
+| 重启持久 | ✅ | 重启后全部服务/驱动自动恢复 |
 
-## 硬件接入现状
+## 启动链（最终形态）
 
-* OTG 线 → 电脑（adb/rockusb）
-* 串口 → 电脑 COM1（主板 16550，最高 115200；板端 U-Boot 为 1500000，
-  故 U-Boot 阶段不可见，定制内核 console 已改为 115200）
-* 网线已插路由器
-* 板上有 RECOVERY / Reset 按键
+```
+BootROM → eMMC idbloader(0x40) → uboot.img(0x4000) + trust.img(0x6000)
+  → U-Boot boot_android → eMMC boot 分区 Android boot.img
+      ├─ kernel:  vendor 4.19.172（原厂）
+      ├─ ramdisk: gadget 调试 initramfs（USB 串口/telnet 应急通道）
+      └─ second:  RSCE（GM8775C DTB）
+  → initramfs 挂载 userdata(ext4) → switch_root → systemd (Armbian trixie)
+```
 
-## 下一步
+## 关键经验（踩坑记录）
 
-1. 接 HDMI 观察上电输出（extlinux 已带 `video=HDMI-A-1:1920x1080@60e`）。
-2. SD 卡换定制镜像（读卡器直写，或恢复 Android 后经 adb 远程写入）。
-3. 若 U-Boot 阶段仍需可见：换 CH340/CP2102/FTDI USB-TTL（支持 1.5 Mbps）。
-4. 需要时 RECOVERY 键进 loader，RKDevTool 重刷官方固件救砖。
+1. **串口**：板子调试串口是 Type-C（USB），PC 的 COM1 是主板 16550（≤115200），
+   原厂 fiq-debugger 波特率 1500000——曾导致长期"串口无输出"假象；
+   DTB 内 `rockchip,baudrate` 可 patch 为 115200。
+2. **uboot.img 不可修改**：LOADER 封装带校验，改一个字节加载器即拒绝
+   （表现为回落 rockusb 或 eMMC Android）。
+3. **BootROM 降级**：SD 引导链无效时自动回落 eMMC；SD 有效时优先 SD。
+4. **boot.img 格式**：与原厂逐字节同构（v5 做法：仅换 ramdisk）即可被
+   boot_android 接受；initramfs 提供应急调试通道。
+5. **Armbian 首次登录初始化**会锁定 root 密码登录（需 console 初始化后放行）。
+6. **Windows ssh askpass 密码认证时好时坏**，paramiko 稳定。
 
-## 2026-10-10 深夜更新（route B 部署）
+## 维护入口
 
-| 时间 | 动作 | 结果 |
-|---|---|---|
-| 22:12 | route-B 镜像（原厂引导链+vendor 4.19 内核+Armbian trixie rootfs）写入 SD 卡 | ✅ GPT/CRC 校验通过 |
-| 22:20 | 发现 eMMC loader 区其实从未被清（首轮 dd 静默失败），Android 完好 | ✅ adb 恢复可随时救砖 |
-| 22:24 | SD 在位上电：adb 消失（SD 引导链被拉起），但串口 115200 无输出、无网络 | ⚠️ 盲区 |
-| 22:45 | **根因定位**：vendor DTB `/fiq-debugger` 写死 `rockchip,baudrate = <1500000>`，COM1（16550）上限 115200 无法接收 | ✅ 已破解 |
-| 22:50 | 三份 DTB 波特率 patch 为 115200（tools/patch_fiq_baud.py）；boot.img v2 增加 `earlycon=uart8250,mmio32,0xff180000,115200` + `console=tty1` | ✅ 待刷入 SD |
-
-硬件确认：调试串口 = **UART0 @ 0xff180000**（DTB serial0/fiq-debugger 指向），
-即 COM1 所接引脚；fiq-debugger 控制台默认 1500000 波特率。
-
-待办：拔 SD 恢复 Android → 热插 SD → adb 写入 boot.img v2 → 断电重启观察
-COM1@115200 + 屏幕（console=tty1）。
+- SSH：`root@192.168.100.122`（密码见会话记录；管理公钥 `ai3399c-admin` 已装）
+- 救砖：RECOVERY 键进 loader，RKDevTool 重刷官方固件
+  `AI3399C_RK3399_Android10_A_20241031.162147.img`；或 SD 卡启动
+  `vendor-boot` release 的完整镜像
+- 构建：GitHub Actions `build-vendor-image.yml` 一键产出完整刷机镜像

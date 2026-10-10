@@ -1,5 +1,10 @@
 # AI3399C-armbian
 
+> ✅ **适配完成（2026-10-11）**：Armbian trixie（vendor 4.19.172 内核）已在
+> AI3399-C 上从 eMMC 自主启动，有线/WiFi（RTL8723DS）、GPU（Mali）、
+> LVDS 显示（GM8775C 1920x1080）、音频（ES8388/HDMI）全部可用，
+> 重启持久。详见 [documents/04-deployment-log.md](documents/04-deployment-log.md)。
+
 瑞芯微 RK3399 **AI3399-C** 开发板（南昌新威视 / njxwst.com，hwid `AI3399C_V2`）
 的 Armbian 适配仓库，基于 [ophub/amlogic-s9xxx-armbian](https://github.com/ophub/amlogic-s9xxx-armbian)
 的 arm64 镜像重建流水线与其设备 profile `aio-3399c`。
