@@ -43,20 +43,11 @@ def main():
     assert tmpl[:8] == b"ANDROID!", "template is not an Android boot image"
 
     (t_ksize, kaddr, t_rsize, raddr, t_ssize, saddr, tags_addr,
-     page_size, dt_size, unused) = struct.unpack_from("<10I", tmpl, 8)
+     page_size, hdr_ver, os_version) = struct.unpack_from("<10I", tmpl, 8)
     name = tmpl[48:64]
     t_cmdline = tmpl[64:576].split(b"\0", 1)[0].decode(errors="replace")
     t_id = tmpl[576:608]
     extra_cmdline = tmpl[608:1632]
-
-    hdr_ver = 0
-    if len(tmpl) >= 1652:
-        hdr_ver = struct.unpack_from("<I", tmpl, 1632 + 12)[0]  # header_size@1644 then ver?
-        # header version lives at offset 1632-4? be explicit: v1: recovery_dtbo_size@1632,
-        # recovery_dtbo_offset@1636(u64), header_size@1644, v2: total_size@1648.
-        # The standard header_version field is at 40? No: it is at 1632-4+... use spec:
-        # boot_img_hdr_v1 ends with header_version u32 at offset 1628.
-        hdr_ver = struct.unpack_from("<I", tmpl, 1628)[0]
 
     if a.page_size:
         page_size = a.page_size
@@ -80,23 +71,20 @@ def main():
     hdr = bytearray(1632)
     hdr[0:8] = b"ANDROID!"
     struct.pack_into("<10I", hdr, 8, len(kernel), kaddr, len(ramdisk), raddr,
-                     len(second), saddr, tags_addr, page_size, 0, 0)
+                     len(second), saddr, tags_addr, page_size, hdr_ver, os_version)
     hdr[48:64] = name
     hdr[64:64 + len(main_cmd)] = main_cmd
     hdr[576:608] = t_id
     hdr[608:608 + len(extra)] = extra
 
     if hdr_ver >= 1:
-        hdr += struct.pack("<I", 0)              # recovery_dtbo_size
-        hdr += struct.pack("<Q", 0)              # recovery_dtbo_offset (filled later)
+        hdr += struct.pack("<I", 0)              # recovery_dtbo_size (none)
+        hdr += struct.pack("<Q", 0)              # recovery_dtbo_offset (none)
         hdr += struct.pack("<I", 1648)           # header_size (v1)
     if hdr_ver >= 2:
         total = align(len(hdr) + 4, page_size) + align(len(kernel), page_size) \
             + align(len(ramdisk), page_size) + align(len(second), page_size)
         hdr += struct.pack("<I", total)          # total_size
-        struct.pack_into("<Q", hdr, 1636, align(len(hdr), page_size)
-                         + align(len(kernel), page_size) + align(len(ramdisk), page_size)
-                         + align(len(second), page_size))
         struct.pack_into("<I", hdr, 1644, 1652)  # header_size (v2)
 
     out = bytearray()
