@@ -156,12 +156,18 @@ jobs:
           armbian_url="${{ inputs.armbian_url }}"
           if  [[ -z "${armbian_url}" ]]; then
               armbian_site="https://armbian.tnahosting.net/dl/odroidn2/archive/"
-              armbian_name="Armbian.*noble.*.img.xz"
-              armbian_file=$(curl -s "${armbian_site}" | grep -oE "${armbian_name}" | head -n 1)
+              listing=$(curl -s "${armbian_site}")
+              # Match the newest available release; archive currently carries
+              # resolute/trixie images, older archives may carry noble/bookworm.
+              for r in resolute noble trixie bookworm; do
+                  armbian_file=$(echo "${listing}" | grep -oE "Armbian[^\"']*_${r}_[^\"']*minimal\.img\.xz" | head -n 1)
+                  [[ -n "${armbian_file}" ]] && break
+              done
               if [[ -n "${armbian_file}" ]]; then
                   armbian_url="${armbian_site}${armbian_file}"
               else
                   echo -e "Error: No valid Armbian image found at: [ ${armbian_site} ]"
+                  echo "${listing}" | head -n 40
                   exit 1
               fi
           fi
