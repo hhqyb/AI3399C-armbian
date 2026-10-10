@@ -116,8 +116,8 @@ jobs:
           sudo cp "${assets}/rk3399-ai3399c.dtb" /mnt/rootfs/boot/
           sudo cp "${assets}/gadget-initramfs.cpio.gz" /mnt/rootfs/boot/
           sudo cp "${assets}/extlinux.conf" /mnt/rootfs/boot/extlinux/extlinux.conf
-          # kernel Image from the vendor-blobs tarball
-          xz -dc vendor-kernel-4.19.172.img.xz | sudo tee /mnt/rootfs/boot/Image >/dev/null
+          # kernel Image from the vendor-blobs tarball (tar.xz -> kernel-extracted.bin)
+          tar -xJOf vendor-kernel-4.19.172.img.xz kernel-extracted.bin | sudo tee /mnt/rootfs/boot/Image >/dev/null
           sudo ls -l /mnt/rootfs/boot /mnt/rootfs/boot/extlinux
 
           sudo sync
@@ -135,49 +135,28 @@ jobs:
         run: |
           set -e
           cd "${WORK}"
-          xz -dkf vendor-kernel-4.19.172.img.xz   # -> vendor-kernel-4.19.172.img
+          # vendor-kernel-4.19.172.img.xz is a tar.xz containing kernel-extracted.bin
+          tar -xJf vendor-kernel-4.19.172.img.xz   # -> kernel-extracted.bin
 
           python3 "${{ github.workspace }}/tools/pack_bootimg.py" \
             --template "${{ github.workspace }}/vendor/bootimg-header-template.bin" \
-            --kernel vendor-kernel-4.19.172.img \
+            --kernel kernel-extracted.bin \
             --ramdisk "${{ github.workspace }}/boot-assets/gadget-initramfs.cpio.gz" \
             --second "${{ github.workspace }}/boot-assets/rsce-115200.bin" \
             --cmdline-mode replace \
             --cmdline "earlycon=uart8250,mmio32,0xff180000,115200 console=ttyFIQ0,115200n8 console=ttyS1,115200n8 console=ttyS2,115200n8 console=ttyS3,115200n8 console=ttyS4,115200n8 console=tty1 androidboot.hardware=rk30board firmware_class.path=/vendor/etc/firmware root=PARTLABEL=rootfs rootwait rw rootfstype=ext4 swiotlb=1 coherent_pool=1m androidboot.selinux=permissive consoleblank=0" \
             --output boot-armbian-vendor.img
 
-          # GPT layout mirroring vendor/parameter-armbian.txt (512-byte sectors):
-          # uboot 0x4000+0x2000, trust 0x6000+0x2000, misc 0x8000+0x2000,
-          # dtb 0xA000+0x2000, dtbo 0xC000+0x2000, vbmeta 0xE000+0x800,
-          # boot 0xE800+0x16000, rootfs 0x24800 + size
+          # GPT layout mirroring vendor/parameter-armbian.txt, assembled by the
+          # same tool used and verified locally (GPT + loader + partitions).
           img="Armbian_vendor419_AI3399C.img"
-          root_sectors=$(( $(stat -c%s rootfs.ext4) / 512 ))
-          end_root=$(( 0x24800 + root_sectors - 1 ))
-          truncate -s $(( (end_root + 1) * 512 )) "${img}"
-
-          sudo sgdisk -Z "${img}"
-          sudo sgdisk -o "${img}"
-          sudo sgdisk -n 1:0x4000:0x5FFF   -t 1:8300 -c 1:uboot   "${img}"
-          sudo sgdisk -n 2:0x6000:0x7FFF   -t 2:8300 -c 2:trust   "${img}"
-          sudo sgdisk -n 3:0x8000:0x9FFF   -t 3:8300 -c 3:misc    "${img}"
-          sudo sgdisk -n 4:0xA000:0xBFFF   -t 4:8300 -c 4:dtb     "${img}"
-          sudo sgdisk -n 5:0xC000:0xDFFF   -t 5:8300 -c 5:dtbo    "${img}"
-          sudo sgdisk -n 6:0xE000:0xE7FF   -t 6:8300 -c 6:vbmeta  "${img}"
-          sudo sgdisk -n 7:0xE800:0x247FF  -t 7:8300 -c 7:boot    "${img}"
-          sudo sgdisk -n 8:0x24800:0       -t 8:8300 -c 8:rootfs  "${img}"
-          sudo sgdisk -p "${img}"
-
-          echo "Writing loader and partition contents"
-          # raw idbloader area (idbloader+padding, extracted from stock eMMC);
-          # MiniLoaderAll.bin is a 'BOOT' container that the flasher unwraps,
-          # so the raw form is used for direct dd writes.
-          gh release download vendor-blobs -D "${WORK}" -p 'emmc-loader-backup.bin'
-          sudo dd if=/dev/zero of="${img}" bs=512 seek=64 count=16320 conv=notrunc status=none
-          sudo dd if=emmc-loader-backup.bin of="${img}" bs=512 seek=64    conv=notrunc status=none
-          sudo dd if=uboot.img        of="${img}" bs=512 seek=0x4000  conv=notrunc status=none
-          sudo dd if=trust.img        of="${img}" bs=512 seek=0x6000  conv=notrunc status=none
-          sudo dd if=boot-armbian-vendor.img of="${img}" bs=512 seek=0xE800 conv=notrunc status=none
-          sudo dd if=rootfs.ext4      of="${img}" bs=512 seek=0x24800 conv=notrunc status=none
+          python3 "${{ github.workspace }}/tools/make_routeb_image.py" \
+            --loader emmc-loader-backup.bin \
+            --uboot uboot.img \
+            --trust trust.img \
+            --boot boot-armbian-vendor.img \
+            --rootfs rootfs.ext4 \
+            --output "${img}"
 
           ls -lh "${img}"
           gzip -kf "${img}"
