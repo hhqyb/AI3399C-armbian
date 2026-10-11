@@ -1,0 +1,86 @@
+#==========================================================================
+# Description: Extract mainline 6.18 boot assets from the ophub-built image:
+#              kernel Image, initrd, device tree, and the kernel modules.
+#              Used to wrap the mainline kernel into the vendor boot.img
+#              format (stock-clone) that this board's boot_android accepts.
+#==========================================================================
+name: Extract mainline 6.18 assets
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Etc/UTC
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  extract:
+    runs-on: ubuntu-26.04-arm
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download ophub 6.18 image
+        run: |
+          set -e
+          work="${{ github.workspace }}/out"
+          mkdir -p "$work"
+          gh release download Armbian_resolute_arm64_server_2026.10 -D "$work" \
+            -p 'Armbian_26.8.1_rockchip_aio-3399c_resolute_6.18.55_server_2026.10.10.img.gz'
+          cd "$work"
+          gunzip -kf *.img.gz
+          ls -lh
+
+      - name: Extract boot assets and modules
+        run: |
+          set -e
+          work="${{ github.workspace }}/out"
+          cd "$work"
+          img=$(ls *.img | head -n 1)
+          loop=$(sudo losetup --find --show -P "$img")
+          sleep 2
+          sudo mkdir -p /mnt/boot /mnt/rootfs /mnt/assets
+          # boot partition = first ext4/fat partition holding extlinux
+          for p in ${loop}p*; do
+            sudo mount -o ro "$p" /mnt/boot 2>/dev/null || continue
+            if [ -f /mnt/boot/extlinux/extlinux.conf ]; then
+              echo "boot partition: $p"
+              sudo cp /mnt/boot/Image /mnt/assets/kernel-6.18-Image
+              sudo cp /mnt/boot/dtb/rockchip/*.dtb /mnt/assets/ 2>/dev/null || true
+              sudo ls /mnt/boot | head
+              initrd=$(sudo find /mnt/boot -name 'initrd*' | head -n 1)
+              [ -n "$initrd" ] && sudo cp "$initrd" /mnt/assets/initrd-6.18.img
+              sudo umount /mnt/boot
+              break
+            fi
+            sudo umount /mnt/boot
+          done
+          # rootfs partition = last partition
+          rootdev=$(ls -1 ${loop}p* | tail -n 1)
+          sudo mount -o ro "$rootdev" /mnt/rootfs
+          kver=$(sudo ls /mnt/rootfs/lib/modules | head -n 1)
+          echo "kernel modules dir: $kver"
+          echo "$kver" | sudo tee /mnt/assets/kernel-version.txt
+          sudo tar -C /mnt/rootfs/lib -cJf /mnt/assets/modules-6.18.tar.xz modules
+          sudo umount /mnt/rootfs
+          sudo losetup -d "$loop"
+          sudo chown -R runner:runner /mnt/assets
+          cp -r /mnt/assets/. "$work"/
+          ls -lh "$work"
+
+      - name: Upload assets
+        uses: ophub/upload-to-releases@main
+        with:
+          tag: mainline-assets
+          artifacts: ${{ github.workspace }}/out/kernel-6.18-Image,${{ github.workspace }}/out/initrd-6.18.img,${{ github.workspace }}/out/modules-6.18.tar.xz,${{ github.workspace }}/out/kernel-version.txt,${{ github.workspace }}/out/*.dtb
+          allow_updates: true
+          remove_artifacts: false
+          replaces_artifacts: true
+          make_latest: false
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ### Mainline 6.18 boot assets for AI3399-C
+            Kernel Image, initrd, DTB and modules extracted from the ophub
+            route-A image, for wrapping into the vendor boot.img format.
