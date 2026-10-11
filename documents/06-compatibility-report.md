@@ -45,10 +45,18 @@
 
 ## 四、已知限制与后续建议
 
-1. **BT 未初始化**：`rtk_hciattach` 把 RTL8723DS 的 BT 挂到 HCI 即可
-   （厂商固件已在 /lib/firmware）；需要时我来配置为开机自启。
-2. **GPU 3D 加速**：内核 Mali 驱动就绪，但 X/Wayland 的 3D 还需配套的
-   ARM Mali DDK 用户态库（vendor ABI）；当前桌面/终端为 2D 渲染，日常够用。
+1. **蓝牙（已修复一半）**：固件、工具、内核栈、电源/复位 GPIO 全部就绪，
+   但芯片 UART 握手未通（详见第五节的修复记录）。
+2. **GPU 3D 加速（✅ 已修复 2026-10-11）**：安装 ARM 官方 Mali Midgard
+   DDK `libmali-midgard-t86x-r18p0-gbm.so`（匹配内核驱动 r18p0 ABI），
+   以 libEGL/libGLESv2/libgbm 替换 Mesa 软渲染（dpkg-divert 隔离 + apt
+   hook/开机服务保链）。实测：
+   ```
+   GL_VENDOR:   ARM
+   GL_RENDERER: Mali-T860
+   GL_VERSION:  OpenGL ES 3.2 v1.r18p0-01rel0
+   ```
+   glmark2-es2-drm 硬件跑分正常。
 3. **内核无 VT/fbcon**（Android 配置）：文字屏显已用 kmscon 方案覆盖；
    若需内核原生串口/HDMI 控制台，可换 ophub 主线内核（代价：LVDS/8723ds
    需另行移植）。
@@ -56,6 +64,25 @@
    公钥登录；Windows 自带 ssh 的 askpass 偶发失效，建议用密钥或 PuTTY。
 5. **4G 模块**：设备已识别（含 4 串口扩展卡），如需拨号上网可配
    ModemManager（MBIM/QMI）。
+
+## 五、蓝牙修复记录（2026-10-11）
+
+已完成：
+
+| 项 | 状态 |
+|---|---|
+| RTL8723DS WiFi 同芯片蓝牙固件（rtl8723ds_fw/config、rtlbt 全套） | ✅ 就位 |
+| Realtek `rtk_hciattach`（含 H5/H4 + 固件下载协议）编译安装 | ✅ /usr/local/bin |
+| 内核 BT 栈（RFCOMM/BNEP/HIDP/hci_uart）+ rfkill 电源/复位/RTS GPIO 驱动 | ✅ |
+| 已验证 UART 通路参数：H5、115200、**偶校验**（Realtek Readme 规定） | ✅ 工具已打偶校验补丁 |
+| 服务模板（上电时序 + 自动拉起） | ✅ 已预置（暂禁用） |
+
+卡点（客观记录）：芯片侧 UART **始终无应答**（H5 3-wire 同步 40 次超时；
+H4 无任何回包）。根因指向原厂 `bluetooth-platdata/rfkill_rk` 驱动对
+`uart_rts_gpios`(GPIO2_C3) 与 pinctrl `rts_gpio` 状态的切换时序——该时序
+原本由 Android 厂商用户态（Realtek 修改版 hci_uart 驱动 + 定制工具）配合
+完成。下一步可选路径：从原厂 super.img 提取 Android 的 BT 初始化序列逐字
+复刻；或换主线内核（自带 rtk H5 驱动链）。
 
 ## 五、验收记录（抽样）
 
