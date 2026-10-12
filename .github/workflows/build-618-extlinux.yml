@@ -41,9 +41,9 @@ jobs:
           set -e
           work="${{ github.workspace }}/src"
           img="${{ github.workspace }}/recovery-618.vfat"
-          # 40 MiB FAT16 image; fits the 44 MiB "boot" partition
+          # 40 MiB image; fits the 44 MiB "boot" partition
           dd if=/dev/zero of="$img" bs=1M count=40
-          mkfs.vfat -F 16 "$img" >/dev/null
+          mkfs.vfat "$img" >/dev/null
           mcopy -i "$img" \
             "$work/kernel-6.18-Image" ::Image
           mcopy -i "$img" \
