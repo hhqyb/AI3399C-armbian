@@ -68,29 +68,28 @@ log "telnetd on 192.168.77.1:23, ACM shell on ttyGS0"
 # ---- locate rootfs partition by PARTNAME ----
 rootdev=""
 for u in /sys/class/block/*/uevent; do
-    if $BB grep -q 'PARTNAME=rootfs' "$u" 2>/dev/null; then
+    if $BB grep -qE 'PARTNAME=(rootfs|super|userdata)' "$u" 2>/dev/null; then
         d=$($BB grep '^DEVNAME=' "$u" | $BB cut -d= -f2)
-        rootdev="/dev/$d"
-        log "rootfs partition found: $rootdev"
+        cand="/dev/$d"
+        log "PARTNAME candidate: $cand"
+        [ -z "$rootdev" ] && rootdev="$cand"
     fi
 done
 
 # fallback: first ext4 filesystem that has /sbin/init
-trydevs="$rootdev /dev/mmcblk1p8 /dev/mmcblk2p8 /dev/mmcblk0p8 /dev/mmcblk1p2 /dev/mmcblk2p15"
-if [ -z "$rootdev" ]; then
-    for d in $trydevs; do
-        [ -b "$d" ] || continue
-        if $BB mount -t ext4 -o ro "$d" /newroot 2>/dev/null; then
-            if [ -x /newroot/sbin/init ] || [ -x /newroot/usr/sbin/init ]; then
-                rootdev="$d"
-                $BB umount /newroot
-                log "rootfs guessed: $d"
-                break
-            fi
+trydevs="$rootdev /dev/mmcblk2p14 /dev/mmcblk2p15 /dev/mmcblk1p8 /dev/mmcblk2p8 /dev/mmcblk0p8 /dev/mmcblk1p2"
+for d in $trydevs; do
+    [ -b "$d" ] || continue
+    if $BB mount -t ext4 -o ro "$d" /newroot 2>/dev/null; then
+        if [ -x /newroot/sbin/init ] || [ -x /newroot/usr/sbin/init ]; then
+            rootdev="$d"
             $BB umount /newroot
+            log "rootfs found: $d"
+            break
         fi
-    done
-fi
+        $BB umount /newroot
+    fi
+done
 
 if [ -n "$rootdev" ]; then
     log "mounting $rootdev on /newroot (rw)"
@@ -108,8 +107,9 @@ else
     log "NO rootfs partition found"
 fi
 
-log "INITRAMFS SHELL REMAINS ACTIVE (debug mode)"
-exec $BB sh
+log "INITRAMFS DEBUG SHELL ON ttyGS0 (USB serial)"
+$BB setsid $BB sh -i < /dev/ttyGS0 > /dev/ttyGS0 2>&1
+exec $BB sh -i < /dev/ttyGS0 > /dev/ttyGS0 2>&1
 """
 
 CPPIO_TRAILER = b"TRAILER!!!"

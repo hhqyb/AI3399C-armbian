@@ -1,0 +1,70 @@
+#==========================================================================
+# Description: Build a VFAT boot partition image with extlinux for the
+#              mainline 6.18 kernel.  Written to the eMMC "recovery"
+#              partition; the vendor U-Boot's distro_bootcmd boots it when
+#              boot_android fails fast (boot partition magic cleared).
+#==========================================================================
+name: Build 6.18 extlinux boot image
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Etc/UTC
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04-arm
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download mainline assets
+        run: |
+          set -e
+          mkdir -p "${{ github.workspace }}/src"
+          cd "${{ github.workspace }}/src"
+          gh release download mainline-assets \
+            -p 'kernel-6.18-Image' -p 'rk3399-ai3399-c.dtb'
+          cp "${{ github.workspace }}/boot-assets/gadget-initramfs.cpio.gz" .
+          cp "${{ github.workspace }}/boot-assets/extlinux-618.conf" extlinux.conf
+          ls -lh
+
+      - name: Assemble VFAT image
+        run: |
+          set -e
+          work="${{ github.workspace }}/src"
+          img="${{ github.workspace }}/recovery-618.vfat"
+          # 48 MiB FAT32 image; fits the 96 MiB "recovery" partition
+          dd if=/dev/zero of="$img" bs=1M count=48
+          mkfs.vfat -F 32 "$img" >/dev/null
+          mcopy -i "$img" \
+            "$work/kernel-6.18-Image" ::Image
+          mcopy -i "$img" \
+            "$work/gadget-initramfs.cpio.gz" ::gadget-initramfs.cpio.gz
+          mcopy -i "$img" \
+            "$work/rk3399-ai3399-c.dtb" ::rk3399-ai3399-c.dtb
+          mmd -i "$img" ::/extlinux
+          mcopy -i "$img" \
+            "$work/extlinux.conf" ::/extlinux/extlinux.conf
+          ls -lh "$img"
+          mdir -i "$img" ::/extlinux
+          echo "image built at $img"
+
+      - name: Upload image
+        uses: ophub/upload-to-releases@main
+        with:
+          tag: mainline-assets
+          artifacts: ${{ github.workspace }}/recovery-618.vfat
+          allow_updates: true
+          remove_artifacts: false
+          replaces_artifacts: true
+          make_latest: false
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ### Mainline 6.18 extlinux boot image (VFAT)
+            Written to the eMMC "recovery" partition; booted by the vendor
+            U-Boot distro_bootcmd when boot_android fails fast.
