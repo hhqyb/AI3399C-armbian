@@ -41,19 +41,14 @@ jobs:
           set -e
           work="${{ github.workspace }}/src"
           img="${{ github.workspace }}/recovery-618.vfat"
-          # 40 MiB image; fits the 44 MiB "boot" partition
-          dd if=/dev/zero of="$img" bs=1M count=40
+          # 44 MiB image; matches the "boot" partition exactly
+          dd if=/dev/zero of="$img" bs=1M count=44
           mkfs.vfat -F 32 "$img" >/dev/null
-          sudo mkdir -p /mnt/vfat
-          sudo mount -o loop "$img" /mnt/vfat
-          sudo mkdir -p /mnt/vfat/extlinux
-          sudo cp "$work/kernel-6.18-Image" /mnt/vfat/Image
-          sudo cp "$work/gadget-initramfs.cpio.gz" /mnt/vfat/gadget-initramfs.cpio.gz
-          sudo cp "$work/rk3399-ai3399-c.dtb" /mnt/vfat/rk3399-ai3399-c.dtb
-          sudo cp "$work/extlinux.conf" /mnt/vfat/extlinux/extlinux.conf
-          sudo df -h /mnt/vfat
-          sudo ls -lhR /mnt/vfat
-          sudo umount /mnt/vfat
+          mcopy -i "$img" "$work/kernel-6.18-Image" ::Image
+          mcopy -i "$img" "$work/gadget-initramfs.cpio.gz" ::gadget-initramfs.cpio.gz
+          mcopy -i "$img" "$work/rk3399-ai3399-c.dtb" ::rk3399-ai3399-c.dtb
+          mmd -i "$img" ::/extlinux
+          mcopy -i "$img" "$work/extlinux.conf" ::/extlinux/extlinux.conf
           ls -lh "$img"
           echo "image built at $img"
 
