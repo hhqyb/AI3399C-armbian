@@ -33,6 +33,9 @@ jobs:
           cp "${{ github.workspace }}/boot-assets/extlinux-618.conf" extlinux.conf
           ls -lh
 
+      - name: Install mtools
+        run: sudo apt-get install -y mtools dosfstools
+
       - name: Assemble VFAT image
         run: |
           set -e
