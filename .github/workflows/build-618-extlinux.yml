@@ -41,9 +41,9 @@ jobs:
           set -e
           work="${{ github.workspace }}/src"
           img="${{ github.workspace }}/recovery-618.vfat"
-          # 48 MiB FAT32 image; fits the 96 MiB "recovery" partition
-          dd if=/dev/zero of="$img" bs=1M count=48
-          mkfs.vfat -F 32 "$img" >/dev/null
+          # 16 MiB FAT16 image; fits the 44 MiB "boot" partition
+          dd if=/dev/zero of="$img" bs=1M count=16
+          mkfs.vfat -F 16 "$img" >/dev/null
           mcopy -i "$img" \
             "$work/kernel-6.18-Image" ::Image
           mcopy -i "$img" \
@@ -68,6 +68,6 @@ jobs:
           make_latest: false
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            ### Mainline 6.18 extlinux boot image (VFAT)
-            Written to the eMMC "recovery" partition; booted by the vendor
+            ### Mainline 6.18 extlinux boot image (VFAT 16MB)
+            Written to the eMMC "boot" partition; booted by the vendor
             U-Boot distro_bootcmd when boot_android fails fast.
