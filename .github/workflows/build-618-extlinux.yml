@@ -44,7 +44,7 @@ jobs:
           # 40 MiB image; fits the 44 MiB "boot" partition
           dd if=/dev/zero of="$img" bs=1M count=40
           mkfs.vfat -F 32 "$img" >/dev/null
-          mkdir -p /mnt/vfat
+          sudo mkdir -p /mnt/vfat
           sudo mount -o loop "$img" /mnt/vfat
           sudo mkdir -p /mnt/vfat/extlinux
           sudo cp "$work/kernel-6.18-Image" /mnt/vfat/Image
